@@ -1,0 +1,23 @@
+[feishu]
+# 飞书应用 App ID（必填）
+# 获取方式：https://open.feishu.cn/app - 选择你的应用 - 凭证与基础信息
+app_id = "cli_xxxxxxxxxx"
+
+# 飞书应用 App Secret（必填）
+app_secret = "xxxxxxxxxxxxx"
+
+# 加密 Key（可选，如果启用了消息加密则需要填写）
+encrypt_key = ""
+
+# 验证 Token（可选，webhook 模式需要）
+verification_token = ""
+
+[maibot]
+# 平台标识（建议保持默认）
+platform = "feishu"
+
+# MaiBot Core 的地址（通常是 localhost）
+host = "localhost"
+
+# MaiBot Core 的 WebSocket 端口（默认 8000）
+port = 8000

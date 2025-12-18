@@ -1,0 +1,14 @@
+# 飞书 SDK
+lark-oapi>=1.2.0
+
+# MaiBot 消息标准
+maim-message>=0.1.0
+
+# HTTP 请求
+requests>=2.31.0
+
+# 日志
+loguru>=0.7.0
+
+# 配置文件解析
+toml>=0.10.2

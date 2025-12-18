@@ -1,0 +1,183 @@
+"""飞书长连接事件客户端"""
+import asyncio
+import websockets
+from websockets import ConnectionClosed
+import json
+import time
+from typing import Optional
+from src.logger import logger
+from src.config import global_config
+from src.feishu_client import feishu_client
+from src.message_converter import process_feishu_message
+
+
+class FeishuEventClient:
+    """飞书长连接事件客户端"""
+    
+    def __init__(self):
+        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self.endpoint_url: Optional[str] = None
+        self.should_reconnect = True
+        self.ping_task: Optional[asyncio.Task] = None
+    
+    async def get_endpoint(self) -> str:
+        """获取长连接 Endpoint"""
+        import aiohttp
+        
+        # 正确的 API 端点：创建长连接配置
+        url = "https://open.feishu.cn/open-apis/im/v1/stream/get"
+        headers = {
+            "Authorization": f"Bearer {feishu_client.get_access_token()}",
+            "Content-Type": "application/json"
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                # 先检查状态码
+                if response.status != 200:
+                    text = await response.text()
+                    raise Exception(f"HTTP {response.status}: {text}")
+                
+                data = await response.json()
+                
+                if data.get("code") == 0:
+                    endpoint = data["data"]["endpoint"]
+                    logger.info(f"✅ 获取长连接 Endpoint 成功: {endpoint}")
+                    return endpoint
+                else:
+                    # 显示详细错误信息
+                    error_msg = data.get("msg", "未知错误")
+                    error_code = data.get("code")
+                    raise Exception(f"获取 Endpoint 失败 (code: {error_code}): {error_msg}")
+    
+    async def send_ping(self):
+        """发送心跳包"""
+        while self.ws and not self.ws.closed:
+            try:
+                await self.ws.send(json.dumps({"type": "PING"}))
+                logger.debug("💓 发送心跳包")
+                await asyncio.sleep(30)  # 每 30 秒发送一次
+            except Exception as e:
+                logger.error(f"❌ 发送心跳失败: {e}")
+                break
+    
+    async def handle_event(self, event_data: dict):
+        """处理事件"""
+        event_type = event_data.get("type")
+        
+        if event_type == "PONG":
+            logger.debug("💚 收到心跳响应")
+            return
+        
+        if event_type == "EVENT_CALLBACK":
+            # 处理事件回调
+            event = event_data.get("event", {})
+            header = event_data.get("header", {})
+            
+            event_type_name = header.get("event_type")
+            logger.info(f"📨 收到事件: {event_type_name}")
+            
+            # 处理消息事件
+            if event_type_name == "im.message.receive_v1":
+                await self.handle_message_event(event)
+            else:
+                logger.warning(f"⚠️ 未处理的事件类型: {event_type_name}")
+    
+    async def handle_message_event(self, event: dict):
+        """处理消息事件"""
+        try:
+            # 构造与 Webhook 相同的消息结构
+            message_data = {
+                "event": event
+            }
+            
+            # 使用现有的消息转换器处理
+            await process_feishu_message(message_data)
+            
+        except Exception as e:
+            logger.error(f"❌ 处理消息事件失败: {e}", exc_info=True)
+    
+    async def connect(self):
+        """连接到飞书长连接服务"""
+        retry_count = 0
+        max_retries = 5
+        
+        while self.should_reconnect and retry_count < max_retries:
+            try:
+                # 获取 Endpoint
+                if not self.endpoint_url:
+                    self.endpoint_url = await self.get_endpoint()
+                
+                logger.info(f"🔗 正在连接飞书长连接服务...")
+                
+                # 建立 WebSocket 连接
+                async with websockets.connect(
+                    self.endpoint_url,
+                    ping_interval=None,  # 我们自己处理心跳
+                    ping_timeout=None,
+                    close_timeout=10
+                ) as ws:
+                    self.ws = ws
+                    logger.info("✅ 飞书长连接已建立")
+                    retry_count = 0  # 重置重试计数
+                    
+                    # 启动心跳任务
+                    self.ping_task = asyncio.create_task(self.send_ping())
+                    
+                    # 监听消息
+                    async for message in ws:
+                        try:
+                            data = json.loads(message)
+                            await self.handle_event(data)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"❌ JSON 解析失败: {e}")
+                        except Exception as e:
+                            logger.error(f"❌ 处理事件失败: {e}", exc_info=True)
+                
+            except ConnectionClosed as e:
+                logger.warning(f"⚠️ 连接已关闭: {e}")
+                self.ws = None
+                self.endpoint_url = None  # 重新获取 Endpoint
+                
+                if self.should_reconnect:
+                    retry_count += 1
+                    wait_time = min(2 ** retry_count, 60)  # 指数退避，最多 60 秒
+                    logger.info(f"🔄 {wait_time} 秒后重连... (尝试 {retry_count}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    break
+                    
+            except Exception as e:
+                logger.error(f"❌ 连接失败: {e}", exc_info=True)
+                self.ws = None
+                self.endpoint_url = None
+                
+                if self.should_reconnect:
+                    retry_count += 1
+                    wait_time = min(2 ** retry_count, 60)
+                    logger.info(f"🔄 {wait_time} 秒后重连... (尝试 {retry_count}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    break
+        
+        if retry_count >= max_retries:
+            logger.error("❌ 达到最大重试次数，放弃重连")
+    
+    async def disconnect(self):
+        """断开连接"""
+        self.should_reconnect = False
+        
+        if self.ping_task:
+            self.ping_task.cancel()
+            try:
+                await self.ping_task
+            except asyncio.CancelledError:
+                pass
+        
+        if self.ws and not self.ws.closed:
+            await self.ws.close()
+            logger.info("🔌 已断开飞书长连接")
+
+
+# 全局实例
+feishu_event_client = FeishuEventClient()
