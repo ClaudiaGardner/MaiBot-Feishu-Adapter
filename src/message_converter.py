@@ -207,7 +207,8 @@ async def process_feishu_message(event_data: Dict[str, Any]):
         additional_config={
             "feishu": {
                 "chat_id": chat_id,
-                "chat_type": chat_type
+                "chat_type": chat_type,
+                "message_id": message.get("message_id", "")  # 🟢 保存消息ID用于回复引用
             },
             "bot_mentioned": bot_mentioned,  # 🟢 标记机器人是否被 @
             "bot_user_id": bot_user_id,      # 🟢 机器人的 user_id
