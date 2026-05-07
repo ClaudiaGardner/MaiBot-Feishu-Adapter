@@ -23,5 +23,5 @@ logger.addHandler(console_handler)
 
 # 为 maim_message 库创建专用 logger
 custom_logger = logging.getLogger("maim_message")
-custom_logger.setLevel(logging.INFO)
+custom_logger.setLevel(logging.DEBUG)  # 改为 DEBUG 以追踪连接状态
 custom_logger.addHandler(console_handler)

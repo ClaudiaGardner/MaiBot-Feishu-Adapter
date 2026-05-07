@@ -22,6 +22,7 @@ class MaiBotClient:
     async def connect(self):
         logger.info(f"正在连接到 MaiBot: ws://{global_config.maibot.host}:{global_config.maibot.port}/ws")
         self.router.register_class_handler(self.handle_maibot_response)
+        logger.info(f"已注册消息处理器: handle_maibot_response")
         await self.router.run()
     
     async def send_message(self, message_base):
@@ -33,10 +34,12 @@ class MaiBotClient:
 
     async def handle_maibot_response(self, message: dict):
         """处理 MaiBot 的回复/指令"""
+        logger.info(f"📩 收到 MaiBot 消息: {str(message)[:200]}...")
         try:
             # 🟢 关键修改：MaiBot 的回复是以 MessageBase 字典格式发送的
             # 检查是否是 MessageBase 格式（包含 message_info 和 message_segment）
             if "message_info" in message and "message_segment" in message:
+                logger.info(f"📩 检测到 MessageBase 格式回复")
                 await self.handle_message_base_reply(message)
                 return
             
@@ -148,16 +151,24 @@ class MaiBotClient:
             # 确定发送目标
             user_info = message_info.user_info
             group_info = message_info.group_info
-            
+
+            # 获取 additional_config 中的目标用户 ID（私聊场景下真正需要发送给谁）
+            additional_config = getattr(message_info, 'additional_config', {}) or {}
+            target_user_id = additional_config.get('platform_io_target_user_id', '')
+
             receive_id = ""
             receive_id_type = ""
-            
+
             if group_info:
                 # 群聊
                 receive_id = str(group_info.group_id)
                 receive_id_type = "chat_id"
+            elif target_user_id:
+                # 私聊：使用 additional_config 中的目标用户 ID
+                receive_id = str(target_user_id)
+                receive_id_type = "open_id"
             elif user_info:
-                # 私聊
+                # 兜底：如果没有 platform_io_target_user_id，使用 user_info.user_id
                 receive_id = str(user_info.user_id)
                 receive_id_type = "open_id"
             else:
@@ -166,9 +177,8 @@ class MaiBotClient:
             
             # 解析 Seg 消息段
             segments = self.parse_seg_to_list(message_segment)
-            
+
             # 获取原始消息 ID（用于回复）
-            additional_config = getattr(message_info, 'additional_config', {}) or {}
             feishu_info = additional_config.get('feishu', {})
             original_message_id = feishu_info.get('message_id')
             
